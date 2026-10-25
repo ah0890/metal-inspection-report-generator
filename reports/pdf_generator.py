@@ -87,6 +87,9 @@ def _register_fonts() -> tuple[str, str]:
                 try:
                     pdfmetrics.registerFont(TTFont("Report", str(r)))
                     pdfmetrics.registerFont(TTFont("Report-Bold", str(b)))
+                    # Map <b> markup in Paragraphs to the bold face.
+                    pdfmetrics.registerFontFamily("Report", normal="Report", bold="Report-Bold",
+                                       italic="Report", boldItalic="Report-Bold")
                     _fonts = ("Report", "Report-Bold")
                     return _fonts
                 except Exception:  # unreadable font file: try the next one

@@ -109,31 +109,25 @@ def build_prompt_payload(report: InspectionReport, evaluation: EvaluationResult)
     }
 
 
-def generate_wording(report: InspectionReport, evaluation: EvaluationResult) -> AIWording:
-    """Ask Claude for professional wording. Raises ClaudeServiceError on any failure."""
+def _parse(system: str, user_content: str, output_format):
+    """One structured Claude call with user-presentable error handling."""
     if not is_configured():
         raise ClaudeServiceError(
             f"{settings.ANTHROPIC_API_KEY_ENV} is not set. Add it to your environment or "
-            "to a .env file (see .env.example) to use AI wording. Evaluation and report "
+            "to a .env file (see .env.example) to use AI wording. Evaluation and document "
             "generation work without it."
         )
-
     client = anthropic.Anthropic(
         api_key=os.environ[settings.ANTHROPIC_API_KEY_ENV].strip(),
         timeout=settings.CLAUDE_TIMEOUT_SECONDS,
     )
-    payload = json.dumps(build_prompt_payload(report, evaluation), indent=2, ensure_ascii=False)
-
     try:
         response = client.beta.messages.parse(
             model=settings.CLAUDE_MODEL,
             max_tokens=settings.CLAUDE_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": f"Inspection data (JSON):\n{payload}\n\nWrite the report wording.",
-            }],
-            output_format=_WordingOutput,
+            system=system,
+            messages=[{"role": "user", "content": user_content}],
+            output_format=output_format,
             output_config={"effort": settings.CLAUDE_EFFORT},
             # If a safety classifier declines, retry server-side on the
             # recommended fallback model instead of failing.
@@ -155,10 +149,56 @@ def generate_wording(report: InspectionReport, evaluation: EvaluationResult) -> 
         raise ClaudeServiceError("Claude declined to produce wording for this request.")
     if response.stop_reason == "max_tokens" or response.parsed_output is None:
         raise ClaudeServiceError("Claude returned an incomplete response. Please try again.")
+    return response.parsed_output
 
-    out = response.parsed_output
+
+def generate_wording(report: InspectionReport, evaluation: EvaluationResult) -> AIWording:
+    """Ask Claude for professional wording. Raises ClaudeServiceError on any failure."""
+    payload = json.dumps(build_prompt_payload(report, evaluation), indent=2, ensure_ascii=False)
+    out = _parse(SYSTEM_PROMPT, f"Inspection data (JSON):\n{payload}\n\nWrite the report wording.",
+                 _WordingOutput)
     return AIWording(
         summary=_clip(out.summary, settings.MAX_CHARS_SUMMARY),
         microstructure=_clip(out.microstructure, settings.MAX_CHARS_OBSERVATION),
         remarks=_clip(out.remarks, settings.MAX_CHARS_REMARKS),
     )
+
+
+# --------------------------------------------------------------------------
+# Covering letter wording
+# --------------------------------------------------------------------------
+
+LETTER_SYSTEM_PROMPT = """\
+You edit the body of a formal covering letter from a private industrial \
+inspection and testing company. The letter forwards inspection reports; it is \
+read by private organizations, project offices and government departments.
+
+Strict rules:
+- Use only the facts in the draft paragraphs and the facts list. Do not add any \
+date, reference number, organization, project, sample detail, test or \
+activity that is not given.
+- Keep every reference number, report number, date and organization name \
+exactly as written.
+- Never state or imply test outcomes (pass, fail, acceptable, conforming, \
+satisfactory, etc.). The letter only forwards the reports.
+- Do not claim accreditation, certification or government status.
+- Formal, concise British business English. Plain text, no markdown.
+- Return 3 to 4 short paragraphs, at most 170 words in total. Do not include \
+the salutation, closing, signature or enclosure list.
+"""
+
+
+class _LetterOutput(BaseModel):
+    paragraphs: list[str] = Field(description="Letter body paragraphs, in order.")
+
+
+def generate_letter_wording(facts: dict, draft_paragraphs: list[str]) -> list[str]:
+    """Polish the standard letter body. The caller shows it to the user for review."""
+    payload = json.dumps({"facts": facts, "draft_paragraphs": draft_paragraphs},
+                         indent=2, ensure_ascii=False)
+    out = _parse(LETTER_SYSTEM_PROMPT,
+                 f"Letter data (JSON):\n{payload}\n\nRewrite the draft paragraphs.", _LetterOutput)
+    paragraphs = [" ".join(p.split()) for p in out.paragraphs if p.strip()]
+    if not paragraphs:
+        raise ClaudeServiceError("Claude returned no letter text. Please try again.")
+    return paragraphs

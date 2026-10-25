@@ -1,8 +1,9 @@
 """SQLite report history.
 
 Stores searchable metadata plus the full report data (JSON) so a report can be
-reopened and regenerated, and a small key/value ``settings`` table that holds
-the saved report defaults. The Anthropic API key is never part of the report
+reopened and regenerated, covering letters (finalized letters keep snapshots
+of their enclosed reports and are never overwritten), and a small key/value
+``settings`` table that holds the saved report defaults and letterhead. The Anthropic API key is never part of the report
 data and is never written here.
 """
 
@@ -17,6 +18,7 @@ from typing import Iterator, Optional
 
 from config import settings
 from models.inspection import InspectionReport
+from models.letter import STATUS_DRAFT, STATUS_FINAL, CompanyProfile, CoveringLetter
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS reports (
@@ -36,6 +38,22 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 CREATE INDEX IF NOT EXISTS idx_reports_material ON reports(material);
 CREATE INDEX IF NOT EXISTS idx_reports_heat ON reports(heat_batch);
+CREATE TABLE IF NOT EXISTS letters (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    letter_number           TEXT NOT NULL UNIQUE,
+    letter_date             TEXT,
+    recipient_organization  TEXT,
+    indenter                TEXT,
+    project_name            TEXT,
+    report_numbers          TEXT NOT NULL,   -- JSON list, enclosure order
+    status                  TEXT NOT NULL,   -- DRAFT | FINAL
+    data_json               TEXT NOT NULL,   -- the covering letter
+    reports_json            TEXT,            -- FINAL: snapshot of the enclosed reports
+    company_json            TEXT,            -- FINAL: snapshot of the letterhead
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    finalized_at            TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (
     key         TEXT PRIMARY KEY,
     value_json  TEXT NOT NULL,
@@ -43,10 +61,19 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 """
 
+LETTER_LIST_COLUMNS = (
+    "id", "letter_number", "letter_date", "recipient_organization", "indenter",
+    "project_name", "report_numbers", "status", "updated_at", "finalized_at",
+)
+
 LIST_COLUMNS = (
     "id", "report_number", "report_date", "customer", "material", "grade",
     "heat_batch", "inspector", "overall_result", "is_sample", "updated_at",
 )
+
+
+class LetterFinalizedError(Exception):
+    """Raised instead of silently overwriting a finalized covering letter."""
 
 
 class ReportRepository:
@@ -149,6 +176,114 @@ class ReportRepository:
                 "updated_at = excluded.updated_at",
                 (key, json.dumps(value, ensure_ascii=False), now),
             )
+
+    def get_report(self, report_number: str) -> Optional[InspectionReport]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT data_json FROM reports WHERE report_number = ?",
+                               (report_number.strip(),)).fetchone()
+        return InspectionReport.from_dict(json.loads(row["data_json"])) if row else None
+
+    # --- Covering letters ------------------------------------------------
+
+    def letter_status(self, letter_number: str) -> Optional[str]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT status FROM letters WHERE letter_number = ?",
+                               (letter_number.strip(),)).fetchone()
+        return row["status"] if row else None
+
+    def save_letter(self, letter: CoveringLetter, *, final: bool = False,
+                    reports: Optional[list[InspectionReport]] = None,
+                    company: Optional[CompanyProfile] = None) -> None:
+        """Save a draft, or finalize with snapshots of the enclosed reports and letterhead.
+
+        A FINAL letter is never overwritten: saving under its number raises
+        LetterFinalizedError, so a revision must use a new letter number.
+        """
+        number = letter.letter_number.strip()
+        if self.letter_status(number) == STATUS_FINAL:
+            raise LetterFinalizedError(
+                f"Letter {number} has already been finalized and cannot be overwritten. "
+                "Use a new letter number (e.g. a revision) for changes."
+            )
+        now = datetime.now().isoformat(timespec="seconds")
+        reports_json = json.dumps([r.to_dict() for r in reports]) if final and reports else None
+        company_json = json.dumps(company.to_dict()) if final and company else None
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO letters (letter_number, letter_date, recipient_organization, indenter,
+                    project_name, report_numbers, status, data_json, reports_json, company_json,
+                    created_at, updated_at, finalized_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(letter_number) DO UPDATE SET
+                    letter_date = excluded.letter_date,
+                    recipient_organization = excluded.recipient_organization,
+                    indenter = excluded.indenter,
+                    project_name = excluded.project_name,
+                    report_numbers = excluded.report_numbers,
+                    status = excluded.status,
+                    data_json = excluded.data_json,
+                    reports_json = excluded.reports_json,
+                    company_json = excluded.company_json,
+                    updated_at = excluded.updated_at,
+                    finalized_at = excluded.finalized_at
+                """,
+                (
+                    number, letter.letter_date, letter.recipient_organization, letter.indenter,
+                    letter.project_name, json.dumps(letter.report_numbers),
+                    STATUS_FINAL if final else STATUS_DRAFT, json.dumps(letter.to_dict()),
+                    reports_json, company_json, now, now, now if final else None,
+                ),
+            )
+
+    def search_letters(self, text: str = "", limit: int = 200) -> list[dict]:
+        """Partial match on letter number, recipient, indenter, project or report numbers."""
+        where, params = "", []
+        if text.strip():
+            cols = ("letter_number", "recipient_organization", "indenter", "project_name",
+                    "report_numbers")
+            where = "WHERE " + " OR ".join(f"{c} LIKE ?" for c in cols)
+            params = [f"%{text.strip()}%"] * len(cols)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {', '.join(LETTER_LIST_COLUMNS)} FROM letters {where} "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["report_numbers"] = json.loads(d["report_numbers"])
+            out.append(d)
+        return out
+
+    def load_letter(self, letter_id: int) -> Optional[dict]:
+        """Letter plus, for FINAL letters, the report and letterhead snapshots."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM letters WHERE id = ?", (letter_id,)).fetchone()
+        if not row:
+            return None
+        return {
+            "letter": CoveringLetter.from_dict(json.loads(row["data_json"])),
+            "status": row["status"],
+            "finalized_at": row["finalized_at"],
+            "reports": ([InspectionReport.from_dict(d) for d in json.loads(row["reports_json"])]
+                        if row["reports_json"] else None),
+            "company": (CompanyProfile.from_dict(json.loads(row["company_json"]))
+                        if row["company_json"] else None),
+        }
+
+    def letter_field_values(self, field_name: str) -> list[str]:
+        """Previously used values of a letter field, most recent first."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT data_json FROM letters ORDER BY updated_at DESC").fetchall()
+        seen, values = set(), []
+        for r in rows:
+            value = str(json.loads(r["data_json"]).get(field_name) or "").strip()
+            if value and value.lower() not in seen:
+                seen.add(value.lower())
+                values.append(value)
+        return values
 
     def delete(self, report_id: int) -> None:
         with self._connect() as conn:

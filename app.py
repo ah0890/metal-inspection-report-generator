@@ -13,6 +13,8 @@ from services import claude_service
 from services.calculation_service import evaluate_report
 from services.validation_service import validate_report
 from ui.ai_summary import render_ai_summary
+from ui.company_settings import render_company_settings
+from ui.covering_letter import render_covering_letter
 from ui.generate_report import render_generate
 from ui.history import render_history
 from ui.inspection_form import render_inspection
@@ -62,6 +64,7 @@ def main() -> None:
     tabs = st.tabs([
         "1 · Inspection & Report",
         "2 · AI Summary (optional)",
+        "3 · Covering Letter",
         "Report History",
         "⚙️ Settings / Edit Defaults",
     ])
@@ -72,9 +75,15 @@ def main() -> None:
     with tabs[1]:
         render_ai_summary()
     with tabs[2]:
-        render_history(repo)
+        render_covering_letter()
     with tabs[3]:
-        render_settings()
+        render_history(repo)
+    with tabs[4]:
+        defaults_tab, company_tab = st.tabs(["Report defaults", "Company letterhead"])
+        with defaults_tab:
+            render_settings()
+        with company_tab:
+            render_company_settings()
 
 
 main()
