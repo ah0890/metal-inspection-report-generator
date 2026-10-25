@@ -52,7 +52,8 @@ def _sidebar() -> None:
             icon = {"PASS": "🟢", "FAIL": "🔴"}.get(overall, "🟠")
             st.markdown(f"{icon} Overall: **{overall}**")
         else:
-            st.markdown(f"⚠️ {len(validation.errors)} validation error(s)")
+            st.markdown("⚠️ **Incomplete** — please fix:")
+            st.caption("\n".join(f"- {e}" for e in validation.errors))
 
         st.divider()
         if claude_service.is_configured():
