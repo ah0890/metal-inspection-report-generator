@@ -355,7 +355,7 @@ def _make_page_decorator(c: ReportContent, total_pages: int, page_counter: list)
             canvas.rotate(40)
             canvas.drawCentredString(0, -20, "SAMPLE DATA")
             canvas.restoreState()
-        y = MARGIN_BOTTOM - 7 * mm
+        y = MARGIN_BOTTOM - 6 * mm
         canvas.setStrokeColor(RULE)
         canvas.setLineWidth(0.5)
         canvas.line(MARGIN_X, y + 3.2 * mm, PAGE_W - MARGIN_X, y + 3.2 * mm)
@@ -365,7 +365,7 @@ def _make_page_decorator(c: ReportContent, total_pages: int, page_counter: list)
         note = "Test status calculated deterministically from stated criteria"
         if c.ai_used:
             note += " · AI-assisted wording reviewed by inspector"
-        canvas.drawCentredString(PAGE_W / 2, y, note)
+        canvas.drawString(MARGIN_X, y - 3 * mm, note)
         canvas.drawRightString(PAGE_W - MARGIN_X, y, f"Generated {generated} · Page {canvas.getPageNumber()} of {total_pages}")
         canvas.restoreState()
 
