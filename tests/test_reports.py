@@ -97,3 +97,19 @@ def test_ai_prompt_contains_python_statuses_not_raw_limits_to_judge():
     payload = claude_service.build_prompt_payload(report, evaluate_report(report))
     assert payload["overall_result"] == "PASS"
     assert all(r["status"] for r in payload["test_results"])
+
+
+def test_report_specific_values_appear_in_pdf_and_docx():
+    from docx import Document
+
+    report = sample_report()
+    report.info.customer, report.info.inspector = "Quality Dept. 7", "Inspector Zed"
+    report.tensile.specimen_id, report.metallography.specimen_id = "TS-77", "MS-88"
+    report.metallography.etchant, report.metallography.magnification = "Keller's reagent", "500X"
+    _, text = _pdf_text(build_pdf(report).data)
+    for value in ("Quality Dept. 7", "Inspector Zed", "TS-77", "MS-88", "Keller's reagent", "500X"):
+        assert value in text, value
+    doc = Document(io.BytesIO(build_docx(report).data))
+    cells = " ".join(c.text for t in doc.tables for row in t.rows for c in row.cells)
+    for value in ("Quality Dept. 7", "Inspector Zed", "TS-77", "MS-88", "Keller's reagent", "500X"):
+        assert value in cells, value

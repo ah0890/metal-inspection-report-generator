@@ -28,8 +28,7 @@ def _save() -> None:
 
 
 def _discard() -> None:
-    defaults = load_defaults(get_repository())
-    defaults_to_state(defaults.config, defaults.reading_count)
+    defaults_to_state(load_defaults(get_repository()))
     st.session_state.pop("settings_errors", None)
     st.session_state["settings_notice"] = "Unsaved changes discarded."
 
@@ -37,8 +36,7 @@ def _discard() -> None:
 def _copy_from_history(report_id: int) -> None:
     report = get_repository().load(report_id)
     if report is not None:
-        d = defaults_from_report(report)
-        defaults_to_state(d.config, d.reading_count)
+        defaults_to_state(defaults_from_report(report))
         st.session_state["settings_notice"] = (
             f"Settings copied from report {report.info.report_number}. Review them and click "
             "**Save defaults** to keep them."
@@ -73,9 +71,8 @@ def render_settings() -> None:
                    + "\n".join(f"- {m}" for m in missing))
 
     st.markdown("#### Report Header")
-    c1, c2 = st.columns(2)
-    c1.text_input("Customer / Department", key="def.info.customer", max_chars=S)
-    c2.text_input("Inspector Name", key="def.info.inspector", max_chars=S)
+    st.caption("Customer / Department and Inspector Name are entered on each report, not saved "
+               "here.")
     c1, c2 = st.columns(2)
     c1.text_input("Specification / Standard", key="def.info.specification", max_chars=S)
     c2.text_input("Drawing / Specification Number", key="def.info.drawing_number", max_chars=S)
@@ -105,8 +102,11 @@ def render_settings() -> None:
     st.markdown("#### Metallography")
     c1, c2, c3 = st.columns(3)
     c1.text_input("Grain Size Standard / Method", key="def.metallography.grain_size_method", max_chars=S)
-    c2.text_input("Etchant", key="def.metallography.etchant", max_chars=S)
-    c3.text_input("Magnification", key="def.metallography.magnification", max_chars=20)
+    c2.text_input("Suggested etchant (confirmed on each report)", key="def.suggested_etchant",
+                  max_chars=S, help="Offered on every new report; the inspector must confirm it "
+                                    "or enter another etchant.")
+    c3.text_input("Initial magnification (editable on each report)",
+                  key="def.initial_magnification", max_chars=20)
 
     render_criteria_editor()
 

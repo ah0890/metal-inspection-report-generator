@@ -28,6 +28,8 @@ def render_mechanical(config: InspectionReport) -> None:
                     step=1.0, format="%.2f", placeholder="Enter reading")
     c3.number_input("Percentage Elongation (%)", key="tensile.elongation", value=None,
                     step=0.1, format="%.1f", placeholder="Enter reading")
+    st.text_input("Tensile Test Specimen ID", key="tensile.specimen_id", max_chars=40,
+                  help="Separate from the metallography specimen ID.")
 
     scale = h.scale or ""
     c1, c2 = st.columns([1, 3])

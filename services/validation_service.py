@@ -70,6 +70,34 @@ def validate_defaults(config: InspectionReport) -> list[str]:
     return errors
 
 
+def validate_new_entry(report: InspectionReport, etchant_confirmed: bool) -> ValidationResult:
+    """Report-specific fields that must be entered or confirmed for each new report.
+
+    Applied to the report being entered in the form only, so reports already in
+    the history regenerate exactly as they were saved.
+    """
+    result = ValidationResult()
+    info, t, m = report.info, report.tensile, report.metallography
+    if not info.customer.strip():
+        result.errors.append("Customer / Department is required for each report.")
+    if not info.inspector.strip():
+        result.errors.append("Inspector Name is required for each report.")
+
+    if m.grain_size is not None or m.microstructure.strip():
+        if not m.specimen_id.strip():
+            result.errors.append("Metallography Specimen ID is required for each report.")
+        if not etchant_confirmed:
+            result.errors.append("Confirm the etchant used for this specimen (Metallography).")
+        elif not m.etchant.strip():
+            result.errors.append("Enter the etchant used for this specimen.")
+        if not m.magnification.strip():
+            result.errors.append("Magnification is required for the metallography section.")
+
+    if any(v is not None for v in (t.yield_strength, t.uts, t.elongation)) and not t.specimen_id.strip():
+        result.warnings.append("Tensile Test Specimen ID is empty.")
+    return result
+
+
 def validate_report(report: InspectionReport) -> ValidationResult:
     result = ValidationResult()
     errors, warnings = result.errors, result.warnings
@@ -89,8 +117,6 @@ def validate_report(report: InspectionReport) -> ValidationResult:
             date.fromisoformat(info.report_date)
         except ValueError:
             errors.append(f"Report Date '{info.report_date}' is not a valid date (YYYY-MM-DD).")
-    if not info.inspector.strip():
-        warnings.append("Inspector Name is empty.")
 
     # --- Tensile ----------------------------------------------------------
     _check_non_negative(t.yield_strength, "Yield Strength", errors)

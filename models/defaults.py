@@ -18,21 +18,26 @@ from typing import Optional
 
 from models.inspection import AcceptanceCriteria, InspectionReport
 
-# Reusable fields per report section. Everything else is entered per inspection.
+# Reusable fields per report section. Everything else is entered per inspection;
+# in particular customer, inspector, specimen IDs, etchant and magnification are
+# report-specific and are never applied silently from the defaults.
 CONFIG_FIELDS: dict[str, tuple[str, ...]] = {
-    "info": ("customer", "inspector", "specification", "drawing_number"),
+    "info": ("specification", "drawing_number"),
     "tensile": (
         "yield_unit", "uts_unit", "gauge_length", "gauge_length_unit",
         "test_temperature", "temperature_unit", "method",
     ),
     "hardness": ("scale", "load_condition", "method"),
-    "metallography": ("grain_size_method", "etchant", "magnification"),
+    "metallography": ("grain_size_method",),
 }
+
+# Initial values offered on a new report. They are suggestions only: the
+# inspector confirms (etchant) or may change (magnification) them per report.
+DEFAULT_SUGGESTED_ETCHANT = "Nital"
+DEFAULT_INITIAL_MAGNIFICATION = "100X"
 
 # Human-readable names, used by the Settings page and the missing-settings check.
 FIELD_LABELS: dict[str, str] = {
-    "info.customer": "Customer / Department",
-    "info.inspector": "Inspector Name",
     "info.specification": "Specification / Standard",
     "info.drawing_number": "Drawing / Specification Number",
     "tensile.yield_unit": "Yield Strength unit",
@@ -46,8 +51,6 @@ FIELD_LABELS: dict[str, str] = {
     "hardness.load_condition": "Hardness Load / Indenter",
     "hardness.method": "Hardness Test Method / Standard",
     "metallography.grain_size_method": "Grain Size Standard / Method",
-    "metallography.etchant": "Etchant",
-    "metallography.magnification": "Magnification",
     "criteria.source": "Source of acceptance criteria",
 }
 
@@ -65,21 +68,32 @@ class ReportDefaults:
     config: InspectionReport = field(default_factory=InspectionReport)
     reading_count: int = 3
     seeded_from: str = ""  # report number the defaults were first taken from
+    suggested_etchant: str = DEFAULT_SUGGESTED_ETCHANT
+    initial_magnification: str = DEFAULT_INITIAL_MAGNIFICATION
 
     def to_dict(self) -> dict:
         return {
             "config": self.config.to_dict(),
             "reading_count": self.reading_count,
             "seeded_from": self.seeded_from,
+            "suggested_etchant": self.suggested_etchant,
+            "initial_magnification": self.initial_magnification,
         }
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "ReportDefaults":
         data = data or {}
+        # Defaults saved by earlier versions held etchant / magnification as fixed
+        # values; carry them over as the suggestions instead of discarding them.
+        legacy = (data.get("config") or {}).get("metallography") or {}
         return cls(
             config=extract_config(InspectionReport.from_dict(data.get("config"))),
             reading_count=int(data.get("reading_count") or 3),
             seeded_from=data.get("seeded_from", ""),
+            suggested_etchant=(data.get("suggested_etchant") or legacy.get("etchant")
+                               or DEFAULT_SUGGESTED_ETCHANT),
+            initial_magnification=(data.get("initial_magnification") or legacy.get("magnification")
+                                   or DEFAULT_INITIAL_MAGNIFICATION),
         )
 
 
@@ -95,9 +109,14 @@ def extract_config(report: InspectionReport) -> InspectionReport:
 
 
 def defaults_from_report(report: InspectionReport) -> ReportDefaults:
-    count = report.hardness.count or 3
-    return ReportDefaults(config=extract_config(report), reading_count=count,
-                          seeded_from=report.info.report_number)
+    m = report.metallography
+    return ReportDefaults(
+        config=extract_config(report),
+        reading_count=report.hardness.count or 3,
+        seeded_from=report.info.report_number,
+        suggested_etchant=m.etchant.strip() or DEFAULT_SUGGESTED_ETCHANT,
+        initial_magnification=m.magnification.strip() or DEFAULT_INITIAL_MAGNIFICATION,
+    )
 
 
 def apply_config(report: InspectionReport, config: InspectionReport) -> InspectionReport:

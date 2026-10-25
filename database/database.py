@@ -183,6 +183,19 @@ class ReportRepository:
                                (report_number.strip(),)).fetchone()
         return InspectionReport.from_dict(json.loads(row["data_json"])) if row else None
 
+    def report_field_values(self, column: str, limit: int = 50) -> list[str]:
+        """Previously used customer / inspector values, most recent first (suggestions)."""
+        if column not in ("customer", "inspector"):
+            raise ValueError(f"Unsupported column: {column}")
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {column} AS v, MAX(updated_at) AS t FROM reports "
+                f"WHERE is_sample = 0 AND TRIM(COALESCE({column}, '')) <> '' "
+                f"GROUP BY {column} ORDER BY t DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [r["v"] for r in rows]
+
     # --- Covering letters ------------------------------------------------
 
     def letter_status(self, letter_number: str) -> Optional[str]:

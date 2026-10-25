@@ -1,7 +1,8 @@
 """Inspection tab: the only data entered for each new report.
 
-Identification and readings are entered here. Units, methods, standards and
-acceptance limits are filled in from the saved settings and shown read-only.
+Identification, customer, inspector, specimen IDs and readings are entered here
+for every report. Units, methods, standards and acceptance limits are filled in
+from the saved settings and shown read-only.
 """
 
 from __future__ import annotations
@@ -14,9 +15,26 @@ from reports.content import build_content
 from services.calculation_service import evaluate_report
 from ui.mechanical_testing import render_mechanical
 from ui.metallography import render_metallography
-from ui.state import current_config, use_saved_defaults
+from ui.state import current_config, get_repository, use_saved_defaults
 
 S = settings.MAX_CHARS_SHORT
+
+
+def _pick(column: str) -> None:
+    value = st.session_state.get(f"pick.info.{column}")
+    if value:
+        st.session_state[f"info.{column}"] = value
+    st.session_state[f"pick.info.{column}"] = None
+
+
+def _with_suggestions(col, label: str, column: str) -> None:
+    """Blank text field plus an optional picker of previously used values (never preselected)."""
+    col.text_input(label, key=f"info.{column}", max_chars=S)
+    values = get_repository().report_field_values(column)
+    if values:
+        col.selectbox(f"Previously used {label}", values, index=None, key=f"pick.info.{column}",
+                      placeholder="↳ or pick a previously used name", on_change=_pick,
+                      args=(column,), label_visibility="collapsed")
 
 
 def _identification() -> None:
@@ -25,6 +43,9 @@ def _identification() -> None:
     c1.text_input("Report Number *", key="info.report_number", max_chars=40)
     c2.date_input("Date *", key="info.report_date", format="YYYY-MM-DD")
     c3.text_input("Material / Product *", key="info.material", max_chars=S)
+    c1, c2 = st.columns(2)
+    _with_suggestions(c1, "Customer / Department *", "customer")
+    _with_suggestions(c2, "Inspector Name *", "inspector")
     c1, c2, c3 = st.columns(3)
     c1.text_input("Material Grade", key="info.grade", max_chars=S)
     c2.text_input("Heat / Batch Number", key="info.heat_batch", max_chars=S)
@@ -32,10 +53,7 @@ def _identification() -> None:
 
 
 def _optional_details() -> None:
-    with st.expander("Optional details for this report (specimen IDs, remarks)"):
-        c1, c2 = st.columns(2)
-        c1.text_input("Tensile Test Specimen ID", key="tensile.specimen_id", max_chars=40)
-        c2.text_input("Metallography Specimen ID", key="metallography.specimen_id", max_chars=40)
+    with st.expander("Optional details for this report (preparation, remarks)"):
         st.text_area("Metallographic Preparation Remarks", key="metallography.preparation_remarks",
                      max_chars=settings.MAX_CHARS_REMARKS, height=68)
         st.text_area("Remarks", key="info.remarks", max_chars=settings.MAX_CHARS_REMARKS, height=68)
@@ -64,10 +82,9 @@ def _applied_settings(config: InspectionReport) -> None:
             f"- **Tensile method:** {t.method or '—'}\n"
             f"- **Hardness:** {h.scale or 'scale not set'} · {h.method or '—'}"
             f"{' · ' + h.load_condition if h.load_condition else ''}\n"
-            f"- **Metallography:** {m.grain_size_method or '—'} · etchant {m.etchant or '—'} · "
-            f"{m.magnification or '—'}\n"
-            f"- **Specification:** {info.specification or '—'} · **Customer:** {info.customer or '—'}"
-            f" · **Inspector:** {info.inspector or '—'}\n"
+            f"- **Grain size method:** {m.grain_size_method or '—'}\n"
+            f"- **Specification:** {info.specification or '—'} · **Drawing / Spec. No.:** "
+            f"{info.drawing_number or '—'}\n"
             f"- **Criteria source:** {config.criteria.source or 'not specified'}"
         )
 

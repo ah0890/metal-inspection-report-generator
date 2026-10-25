@@ -11,9 +11,8 @@ import streamlit as st
 from config import settings
 from services import claude_service
 from services.calculation_service import evaluate_report
-from services.validation_service import validate_report
 from ui.evaluation_view import show_validation
-from ui.state import report_from_state
+from ui.state import report_from_state, validate_form
 
 
 def _generate() -> None:
@@ -21,7 +20,7 @@ def _generate() -> None:
     st.session_state.pop("ai_error", None)
     st.session_state.pop("ai_notice", None)
     report = report_from_state()
-    validation = validate_report(report)
+    validation = validate_form(report)
     if not validation.is_valid:
         st.session_state["ai_error"] = "Fix the validation errors (see the Inspection & Report tab) first."
         st.session_state["last_validation"] = validation

@@ -22,7 +22,7 @@ def test_extract_keeps_settings_but_no_readings():
     assert config.tensile.yield_unit == "MPa"
     assert config.tensile.method == "Example tensile test method"
     assert config.hardness.scale == "HB"
-    assert config.metallography.etchant == "Appropriate laboratory etchant"
+    assert config.metallography.grain_size_method == "Comparison method"
     assert config.criteria.uts.minimum == 300
     # measured values and per-sample details are not defaults
     assert config.tensile.yield_strength is None
@@ -32,6 +32,10 @@ def test_extract_keeps_settings_but_no_readings():
     assert config.metallography.grain_size is None
     assert config.metallography.microstructure == ""
     assert config.info.report_number == "" and config.info.material == ""
+    # report-specific fields are not defaults
+    assert config.info.customer == "" and config.info.inspector == ""
+    assert config.metallography.specimen_id == "" and config.tensile.specimen_id == ""
+    assert config.metallography.etchant == "" and config.metallography.magnification == ""
 
 
 def test_apply_config_fills_settings_and_keeps_readings():
@@ -105,10 +109,10 @@ def test_missing_mandatory_criterion_in_defaults_gives_review_required():
 
 def test_missing_settings_are_reported_not_guessed():
     config = extract_config(sample_report())
-    config.metallography.etchant = ""
+    config.metallography.grain_size_method = ""
     config.criteria.source = ""
     missing = missing_settings(config)
-    assert "Etchant" in missing
+    assert "Grain Size Standard / Method" in missing
     assert "Source of acceptance criteria" in missing
 
 
@@ -125,3 +129,70 @@ def test_validate_defaults_rejects_unit_mismatch_and_bad_limits():
 def test_defaults_round_trip():
     d = defaults_from_report(_real_report())
     assert ReportDefaults.from_dict(d.to_dict()) == d
+
+
+# --- Report-specific fields (customer, inspector, specimen IDs, etchant, magnification)
+
+def test_apply_config_never_overwrites_report_specific_fields():
+    config = extract_config(sample_report())
+    report = InspectionReport()
+    report.info.customer, report.info.inspector = "Dept A", "Inspector B"
+    report.metallography.specimen_id, report.tensile.specimen_id = "M-9", "T-9"
+    report.metallography.etchant, report.metallography.magnification = "Keller's reagent", "200X"
+    apply_config(report, config)
+    assert (report.info.customer, report.info.inspector) == ("Dept A", "Inspector B")
+    assert (report.metallography.specimen_id, report.tensile.specimen_id) == ("M-9", "T-9")
+    assert report.metallography.etchant == "Keller's reagent"
+    assert report.metallography.magnification == "200X"
+
+
+def test_suggestions_default_to_nital_and_100x():
+    d = ReportDefaults()
+    assert d.suggested_etchant == "Nital"
+    assert d.initial_magnification == "100X"
+
+
+def test_legacy_saved_defaults_migrate_to_suggestions():
+    legacy = defaults_from_report(_real_report()).to_dict()
+    legacy.pop("suggested_etchant")
+    legacy.pop("initial_magnification")
+    legacy["config"]["info"]["customer"] = "Old Customer"
+    legacy["config"]["info"]["inspector"] = "Old Inspector"
+    legacy["config"]["metallography"]["etchant"] = "Nital"
+    legacy["config"]["metallography"]["magnification"] = "200X"
+    d = ReportDefaults.from_dict(legacy)
+    assert d.suggested_etchant == "Nital"
+    assert d.initial_magnification == "200X"
+    assert d.config.info.customer == "" and d.config.info.inspector == ""
+    assert d.config.criteria.uts.minimum == 300  # limits kept
+
+
+def test_new_entry_requires_customer_inspector_specimen_and_etchant_confirmation():
+    from services.validation_service import validate_new_entry
+
+    report = sample_report()
+    report.info.customer = report.info.inspector = report.metallography.specimen_id = ""
+    errors = validate_new_entry(report, etchant_confirmed=False).errors
+    assert "Customer / Department is required for each report." in errors
+    assert "Inspector Name is required for each report." in errors
+    assert "Metallography Specimen ID is required for each report." in errors
+    assert "Confirm the etchant used for this specimen (Metallography)." in errors
+    assert validate_new_entry(sample_report(), etchant_confirmed=True).errors == []
+
+
+def test_tensile_specimen_id_is_independent():
+    from services.validation_service import validate_new_entry
+
+    report = sample_report()
+    report.tensile.specimen_id = ""
+    result = validate_new_entry(report, etchant_confirmed=True)
+    assert result.errors == []  # metallography specimen ID still present
+    assert "Tensile Test Specimen ID is empty." in result.warnings
+
+
+def test_historical_reports_still_validate_for_regeneration():
+    from services.report_service import build_pdf
+
+    old = sample_report()
+    old.info.inspector = ""  # e.g. an older report saved without an inspector
+    assert build_pdf(old).page_count == 1

@@ -8,8 +8,16 @@ The inspector enters the results and the acceptance criteria. **Python** compare
 
 ## Features
 
-- **Saved defaults.** Units, test methods and standards, metallography conventions, recurring header details and acceptance limits are saved once in **Settings / Edit Defaults**. Every new report uses them automatically, so routine work is just identification details plus readings.
-- **Quick data entry.** The main form asks only for the report number, date, material and grade, heat/batch and sample number, and the readings: yield strength, UTS, elongation, hardness readings, grain size and microstructure observation. The saved unit is shown next to each field.
+- **Saved defaults.** Units, test methods and standards, the grain size method, specification/drawing references and acceptance limits are saved once in **Settings / Edit Defaults**. Every new report uses them automatically.
+- **Quick data entry.** The main form asks for:
+  - the report details: number, date, material and grade, heat/batch and sample number
+  - **Customer / Department** and **Inspector Name**, both starting blank, with previously used names offered as optional suggestions
+  - the tensile specimen ID and metallography specimen ID, as separate fields
+  - the readings: yield strength, UTS, elongation, hardness, grain size and microstructure
+  - **magnification**, starting at 100X and changeable
+  - the **etchant**: Nital is suggested, but you must confirm it or enter another one on every report
+
+  The saved unit is shown next to each field.
 - **No assumed units.** Every value needs an explicitly selected unit or scale (MPa, N/mm², ksi, psi; HB, HBW, HRA, HRB, HRC, HV, HK).
 - **Multiple hardness readings**, with the average calculated automatically.
 - **Deterministic evaluation.** Minimum, maximum and range criteria are checked in plain Python, and the boundaries count as passing.
@@ -91,13 +99,18 @@ Streamlit opens the app in your browser (default http://localhost:8501).
 **Routine inspection:**
 
 1. Open the application. A new report starts with your saved defaults.
-2. Enter the identification details: report number, date, material, and grade, heat/batch and sample number if needed.
+2. Enter the identification details: report number, date, material, **customer/department** and **inspector**, plus grade, heat/batch and sample number if needed. Customer and inspector start blank on every report. You can type them or pick a previously used name; nothing is selected automatically.
 3. Enter the readings: yield strength, UTS, elongation, hardness readings (the average is calculated for you), grain size and microstructure observation.
 4. Click **Generate PDF** or **Generate Word Report** at the bottom of the same tab. Python validates the readings, evaluates them against the saved acceptance criteria, and builds the one-page report. It is saved to **Report History** automatically.
 5. Optional: in **AI Summary**, click **Generate AI Summary** to have Claude reword your notes, then review the text before generating the report.
 6. Open **3 · Covering Letter** to prepare the official covering letter and the complete submission package (see [Covering letters](#covering-letters)).
 
-Specimen IDs, preparation remarks and general remarks are under **Optional details** in the inspection tab. The **Applied settings** panel shows exactly which limits and standards will be printed.
+In the metallography section:
+- Enter the **specimen ID**. It's required when metallography results are entered, and it's separate from the tensile specimen ID.
+- Check the **magnification**. It starts at 100X; choose or type another value if needed.
+- Answer the **etchant** question: is the suggested etchant (Nital) appropriate for this specimen? Choose *Yes*, or *No* and enter the etchant used. The report can't be generated until you answer. Choosing another etchant does not change the saved suggestion.
+
+Preparation remarks and general remarks are under **Optional details**. The **Applied settings** panel shows exactly which limits and standards will be printed.
 
 To try the app without your own data, click **Load Sample Data** in the sidebar.
 
@@ -146,12 +159,20 @@ With the sample data, every test and the overall result are **PASS**: YS 275 MPa
   - result units (yield, UTS, gauge length, temperature) and the hardness scale
   - gauge length and test temperature
   - tensile and hardness test methods and standards, and the hardness load/indenter
-  - grain size method, etchant and magnification
-  - customer, inspector, specification and drawing number
+  - grain size method
+  - specification and drawing number
+  - the suggested etchant (Nital) and initial magnification (100X), offered on each new report but never applied without your confirmation
   - all acceptance limits, with their units, mandatory flags and source
   - the default number of hardness readings
 
-  Measured values, observations, specimen IDs and remarks are **never** saved as defaults.
+  **Report-specific** fields are **never** saved as defaults. They're entered or confirmed on every report:
+  - customer/department and inspector name
+  - tensile and metallography specimen IDs
+  - the etchant actually used and the magnification
+  - report number, date, and sample and batch identification
+  - readings, observations and remarks
+
+  Reports already in the history keep the values they were saved with.
 - **First run:** if no defaults have been saved yet, they are taken from the most recent non-sample report in the history. Any setting that report did not contain is listed as **"Not set"** on the Settings page rather than guessed.
 - **Changes:** defaults change only when you click **Save defaults**. Generating a report never changes them. You can also copy the settings of any report in the history into the Settings form and then save them.
 - **Old reports:** a report reopened from history keeps the units, standards and limits it was created with, so it is never quietly re-evaluated against new limits. The **Applied settings** panel has a **Use the saved defaults instead** button if you want to switch a reopened report to the current defaults. Sample data likewise keeps its own sample criteria.

@@ -7,16 +7,15 @@ import streamlit as st
 from database.database import ReportRepository
 from services.calculation_service import evaluate_report
 from services.report_service import ReportValidationError, build_docx, build_pdf
-from services.validation_service import validate_report
 from ui.evaluation_view import show_evaluation, show_validation
-from ui.state import report_from_state
+from ui.state import report_from_state, validate_form
 
 
 def render_generate(repo: ReportRepository) -> None:
     st.subheader("Generate Report")
 
     report = report_from_state()
-    validation = validate_report(report)
+    validation = validate_form(report)
     show_validation(validation)
     if validation.is_valid:
         show_evaluation(evaluate_report(report))

@@ -29,8 +29,7 @@ from services.letter_service import (
     validate_letter,
 )
 from services.report_service import ReportValidationError, build_pdf
-from services.validation_service import validate_report
-from ui.state import get_repository, report_from_state
+from ui.state import get_repository, report_from_state, validate_form
 
 P = "letter."
 _TRANSIENT = ("letter_files", "letter_package", "letter_ai_error")
@@ -148,7 +147,7 @@ def _text(col, label: str, field: str, *, history: bool = False, area: bool = Fa
 def _current_report():
     """Current form report if it is valid, else None."""
     report = report_from_state()
-    return report if validate_report(report).is_valid else None
+    return report if validate_form(report).is_valid else None
 
 
 def _gather_reports(letter: CoveringLetter):

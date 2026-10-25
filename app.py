@@ -11,7 +11,6 @@ from config import settings
 from models.sample_data import sample_report
 from services import claude_service
 from services.calculation_service import evaluate_report
-from services.validation_service import validate_report
 from ui.ai_summary import render_ai_summary
 from ui.company_settings import render_company_settings
 from ui.covering_letter import render_covering_letter
@@ -19,7 +18,14 @@ from ui.generate_report import render_generate
 from ui.history import render_history
 from ui.inspection_form import render_inspection
 from ui.settings_page import render_settings
-from ui.state import get_repository, init_state, load_report, report_from_state, start_new_report
+from ui.state import (
+    get_repository,
+    init_state,
+    load_report,
+    report_from_state,
+    start_new_report,
+    validate_form,
+)
 
 st.set_page_config(page_title="Metal Inspection Report Generator", page_icon="🔩", layout="wide")
 
@@ -39,7 +45,7 @@ def _sidebar() -> None:
 
         st.divider()
         st.markdown("**Live status**")
-        validation = validate_report(report)
+        validation = validate_form(report)
         if validation.is_valid:
             overall = evaluate_report(report).overall.value
             icon = {"PASS": "🟢", "FAIL": "🔴"}.get(overall, "🟠")
