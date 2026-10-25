@@ -1,46 +1,84 @@
-"""Inspection Information tab."""
+"""Inspection tab: the only data entered for each new report.
+
+Identification and readings are entered here. Units, methods, standards and
+acceptance limits are filled in from the saved settings and shown read-only.
+"""
 
 from __future__ import annotations
 
 import streamlit as st
 
 from config import settings
+from models.inspection import InspectionReport
+from reports.content import build_content
+from services.calculation_service import evaluate_report
+from ui.mechanical_testing import render_mechanical
+from ui.metallography import render_metallography
+from ui.state import current_config, use_saved_defaults
 
 S = settings.MAX_CHARS_SHORT
 
 
-def render_inspection_info() -> None:
-    st.subheader("Inspection Information")
-    st.caption("Fields marked * are required.")
-
-    st.markdown("**Report**")
+def _identification() -> None:
+    st.markdown("#### Report Identification")
     c1, c2, c3 = st.columns(3)
     c1.text_input("Report Number *", key="info.report_number", max_chars=40)
     c2.date_input("Date *", key="info.report_date", format="YYYY-MM-DD")
-    c3.text_input("Inspector Name", key="info.inspector", max_chars=S)
-    st.text_input("Customer / Department", key="info.customer", max_chars=S)
+    c3.text_input("Material / Product *", key="info.material", max_chars=S)
+    c1, c2, c3 = st.columns(3)
+    c1.text_input("Material Grade", key="info.grade", max_chars=S)
+    c2.text_input("Heat / Batch Number", key="info.heat_batch", max_chars=S)
+    c3.text_input("Sample Number", key="info.sample_number", max_chars=S)
 
-    st.markdown("**Material**")
-    c1, c2 = st.columns(2)
-    c1.text_input("Material / Product *", key="info.material", max_chars=S)
-    c2.text_input("Material Grade", key="info.grade", max_chars=S)
-    c1, c2 = st.columns(2)
-    c1.text_input("Heat / Batch Number", key="info.heat_batch", max_chars=S)
-    c2.text_input("Sample Number", key="info.sample_number", max_chars=S)
 
-    st.markdown("**Specification**")
-    c1, c2 = st.columns(2)
-    c1.text_input("Drawing / Specification Number", key="info.drawing_number", max_chars=S)
-    c2.text_input("Specification / Standard", key="info.specification", max_chars=S)
+def _optional_details() -> None:
+    with st.expander("Optional details for this report (specimen IDs, remarks)"):
+        c1, c2 = st.columns(2)
+        c1.text_input("Tensile Test Specimen ID", key="tensile.specimen_id", max_chars=40)
+        c2.text_input("Metallography Specimen ID", key="metallography.specimen_id", max_chars=40)
+        st.text_area("Metallographic Preparation Remarks", key="metallography.preparation_remarks",
+                     max_chars=settings.MAX_CHARS_REMARKS, height=68)
+        st.text_area("Remarks", key="info.remarks", max_chars=settings.MAX_CHARS_REMARKS, height=68)
+        st.checkbox("Mark as SAMPLE DATA (adds a watermark to the report)", key="info.is_sample")
 
-    st.text_area(
-        "Remarks",
-        key="info.remarks",
-        max_chars=settings.MAX_CHARS_REMARKS,
-        height=90,
-        help="Free text. Claude can reword this professionally in the AI Summary tab.",
-    )
-    st.checkbox(
-        "Mark as SAMPLE DATA (adds a watermark to the report)",
-        key="info.is_sample",
-    )
+
+def _applied_settings(config: InspectionReport) -> None:
+    from_report = st.session_state.get("config_source") == "report"
+    title = ("Settings stored with this report" if from_report
+             else "Saved default settings applied to this report")
+    with st.expander(f"⚙️ {title}", expanded=False):
+        if from_report:
+            st.info("This report was reopened from history (or is sample data), so it keeps the "
+                    "units, standards and limits it was created with.")
+            st.button("Use the saved defaults instead", on_click=use_saved_defaults)
+        else:
+            st.caption("Change these in **Settings / Edit Defaults**. They are used automatically "
+                       "for every new report.")
+        # Show exactly what will be printed, using the report's own formatting.
+        content = build_content(config, evaluate_report(config))
+        rows = [{"Test": i.name + (" *" if i.mandatory else ""), "Requirement": i.requirement_text}
+                for i in content.mechanical + content.metallography]
+        st.dataframe(rows, hide_index=True, width="stretch")
+        t, h, m, info = config.tensile, config.hardness, config.metallography, config.info
+        st.markdown(
+            f"- **Tensile method:** {t.method or '—'}\n"
+            f"- **Hardness:** {h.scale or 'scale not set'} · {h.method or '—'}"
+            f"{' · ' + h.load_condition if h.load_condition else ''}\n"
+            f"- **Metallography:** {m.grain_size_method or '—'} · etchant {m.etchant or '—'} · "
+            f"{m.magnification or '—'}\n"
+            f"- **Specification:** {info.specification or '—'} · **Customer:** {info.customer or '—'}"
+            f" · **Inspector:** {info.inspector or '—'}\n"
+            f"- **Criteria source:** {config.criteria.source or 'not specified'}"
+        )
+
+
+def render_inspection() -> None:
+    config = current_config()
+    st.subheader("New Inspection")
+    st.caption("Enter the identification details and readings, then generate the report below. "
+               "Fields marked * are required.")
+    _identification()
+    render_mechanical(config)
+    render_metallography()
+    _optional_details()
+    _applied_settings(config)

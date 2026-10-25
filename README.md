@@ -8,7 +8,8 @@ The inspector enters the results and the acceptance criteria. **Python** compare
 
 ## Features
 
-- **Structured data entry** in a Streamlit interface: inspection information, tensile test, hardness test, metallography, acceptance criteria.
+- **Saved defaults.** Units, test methods and standards, metallography conventions, recurring header details and acceptance limits are saved once in **Settings / Edit Defaults**. Every new report uses them automatically, so routine work is just identification details plus readings.
+- **Quick data entry.** The main form asks only for the report number, date, material and grade, heat/batch and sample number, and the readings: yield strength, UTS, elongation, hardness readings, grain size and microstructure observation. The saved unit is shown next to each field.
 - **No assumed units.** Every value needs an explicitly selected unit or scale (MPa, N/mm², ksi, psi; HB, HBW, HRA, HRB, HRC, HV, HK).
 - **Multiple hardness readings**, with the average calculated automatically.
 - **Deterministic evaluation.** Minimum, maximum and range criteria are checked in plain Python, and the boundaries count as passing.
@@ -83,16 +84,38 @@ Streamlit opens the app in your browser (default http://localhost:8501).
 
 ## Example workflow
 
-1. Open the application. Click **Load Sample Data** in the sidebar to try it straight away, or **New Report** to start from a blank form.
-2. **Inspection Information**: report number, date, customer, material, grade, heat/batch, sample number, drawing and specification, inspector, remarks.
-3. **Mechanical Testing**: yield strength, UTS and elongation, with units, gauge length, specimen ID, temperature and method. Then the hardness scale and readings; the average is calculated for you.
-4. **Metallography**: grain size number and method, etchant, magnification, specimen ID, microstructure observation, preparation remarks.
-5. **Acceptance Criteria**: enter min/max limits from the governing specification and the source of those criteria. Tick **Mandatory** for each test that must pass.
-6. Click **Evaluate**. Python calculates each test's status and the overall result.
-7. **AI Summary**: click **Generate AI Summary**. Claude rewrites your notes, and you review and edit the text.
-8. **Generate Report**: click **Generate PDF** or **Generate Word Report**, then download. The report is saved to **Report History** automatically.
+**One-time setup:** open **⚙️ Settings / Edit Defaults** and check the units, test methods and standards, metallography settings, header details and acceptance limits. Click **Save defaults**. You only need to come back here when something changes.
+
+**Routine inspection:**
+
+1. Open the application. A new report starts with your saved defaults.
+2. Enter the identification details: report number, date, material, and grade, heat/batch and sample number if needed.
+3. Enter the readings: yield strength, UTS, elongation, hardness readings (the average is calculated for you), grain size and microstructure observation.
+4. Click **Generate PDF** or **Generate Word Report** at the bottom of the same tab. Python validates the readings, evaluates them against the saved acceptance criteria, and builds the one-page report. It is saved to **Report History** automatically.
+5. Optional: in **AI Summary**, click **Generate AI Summary** to have Claude reword your notes, then review the text before generating the report.
+
+Specimen IDs, preparation remarks and general remarks are under **Optional details** in the inspection tab. The **Applied settings** panel shows exactly which limits and standards will be printed.
+
+To try the app without your own data, click **Load Sample Data** in the sidebar.
 
 With the sample data, every test and the overall result are **PASS**: YS 275 MPa ≥ 250, UTS 325 MPa ≥ 300, elongation 12.4 % ≥ 10, hardness 82 HB within 70–90, grain size No. 8, which is No. 7 or finer.
+
+## Saved defaults
+
+- **Where they are stored:** a `settings` table in the same SQLite database as the report history (`data/reports.db`), so they survive restarts.
+- **What is saved:**
+  - result units (yield, UTS, gauge length, temperature) and the hardness scale
+  - gauge length and test temperature
+  - tensile and hardness test methods and standards, and the hardness load/indenter
+  - grain size method, etchant and magnification
+  - customer, inspector, specification and drawing number
+  - all acceptance limits, with their units, mandatory flags and source
+  - the default number of hardness readings
+
+  Measured values, observations, specimen IDs and remarks are **never** saved as defaults.
+- **First run:** if no defaults have been saved yet, they are taken from the most recent non-sample report in the history. Any setting that report did not contain is listed as **"Not set"** on the Settings page rather than guessed.
+- **Changes:** defaults change only when you click **Save defaults**. Generating a report never changes them. You can also copy the settings of any report in the history into the Settings form and then save them.
+- **Old reports:** a report reopened from history keeps the units, standards and limits it was created with, so it is never quietly re-evaluated against new limits. The **Applied settings** panel has a **Use the saved defaults instead** button if you want to switch a reopened report to the current defaults. Sample data likewise keeps its own sample criteria.
 
 ## How the evaluation works
 
@@ -125,14 +148,16 @@ metal-inspection-report-generator/
 ├── config/
 │   └── settings.py             # paths, branding, units/scales, AI model, text limits
 ├── database/
-│   └── database.py             # SQLite report history (metadata + report JSON)
+│   └── database.py             # SQLite report history + saved settings table
 ├── models/
 │   ├── inspection.py           # dataclasses: report, tests, criteria, AI text
+│   ├── defaults.py             # which fields are reusable defaults; extract/apply/missing
 │   ├── evaluation.py           # Status / OverallResult / evaluation result types
 │   └── sample_data.py          # SAMPLE DATA report
 ├── services/
 │   ├── calculation_service.py  # deterministic PASS/FAIL logic (no AI)
 │   ├── validation_service.py   # input validation (errors and warnings)
+│   ├── defaults_service.py     # load / save defaults (first run: from latest real report)
 │   ├── claude_service.py       # Claude wording only, with strict no-invention prompt
 │   ├── report_service.py       # validate -> evaluate -> render -> save to history
 │   └── formatting.py           # shared number/requirement formatting
@@ -140,7 +165,7 @@ metal-inspection-report-generator/
 │   ├── content.py              # WHAT goes on the report (shared by PDF and DOCX)
 │   ├── pdf_generator.py        # HOW the PDF looks (ReportLab Platypus, one-page fitting)
 │   └── docx_generator.py       # HOW the Word report looks (python-docx)
-├── ui/                         # one module per tab, plus session-state mapping
+├── ui/                         # inspection form, AI summary, history, settings page, state mapping
 └── tests/                      # pytest suite
 ```
 

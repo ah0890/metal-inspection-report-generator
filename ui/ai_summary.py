@@ -23,7 +23,7 @@ def _generate() -> None:
     report = report_from_state()
     validation = validate_report(report)
     if not validation.is_valid:
-        st.session_state["ai_error"] = "Fix the validation errors (see Generate Report tab) first."
+        st.session_state["ai_error"] = "Fix the validation errors (see the Inspection & Report tab) first."
         st.session_state["last_validation"] = validation
         return
     evaluation = evaluate_report(report)

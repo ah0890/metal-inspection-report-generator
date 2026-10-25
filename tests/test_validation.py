@@ -56,7 +56,7 @@ def test_empty_report_is_invalid():
 def test_unit_must_be_selected():
     report = sample_report()
     report.tensile.uts_unit = None
-    assert any("Ultimate Tensile Strength: select a unit" in e for e in _errors(report))
+    assert any("Ultimate Tensile Strength: no unit is set" in e for e in _errors(report))
 
 
 def test_hardness_scale_must_be_selected():

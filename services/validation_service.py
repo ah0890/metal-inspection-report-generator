@@ -28,9 +28,13 @@ def _check_non_negative(value: Optional[float], label: str, errors: list[str]) -
         errors.append(f"{label} cannot be negative (entered {value:g}).")
 
 
-def _check_unit(value: Optional[float], unit: Optional[str], label: str, errors: list[str]) -> None:
+SETTINGS_HINT = " Units are never assumed — set it in Settings / Edit Defaults."
+
+
+def _check_unit(value: Optional[float], unit: Optional[str], label: str, errors: list[str],
+                hint: str = SETTINGS_HINT) -> None:
     if value is not None and not unit:
-        errors.append(f"{label}: select a unit. Units are never assumed.")
+        errors.append(f"{label}: no unit is set.{hint}")
 
 
 def _check_criterion(c: Criterion, label: str, errors: list[str], needs_unit: bool = True) -> None:
@@ -39,7 +43,31 @@ def _check_criterion(c: Criterion, label: str, errors: list[str], needs_unit: bo
     if c.minimum is not None and c.maximum is not None and c.minimum > c.maximum:
         errors.append(f"{label}: minimum ({c.minimum:g}) is greater than maximum ({c.maximum:g}).")
     if needs_unit and c.is_specified and not c.unit:
-        errors.append(f"{label} criterion: select a unit / scale.")
+        errors.append(f"{label} criterion: no unit / scale is set.")
+
+
+def validate_defaults(config: InspectionReport) -> list[str]:
+    """Errors that prevent saving a configuration as the defaults."""
+    errors: list[str] = []
+    t, c = config.tensile, config.criteria
+    _check_non_negative(t.gauge_length, "Gauge Length", errors)
+    _check_unit(t.gauge_length, t.gauge_length_unit, "Gauge Length", errors, hint="")
+    _check_unit(t.test_temperature, t.temperature_unit, "Test Temperature", errors, hint="")
+    _check_criterion(c.yield_strength, "Yield Strength", errors)
+    _check_criterion(c.uts, "UTS", errors)
+    _check_criterion(c.elongation, "Elongation", errors, needs_unit=False)
+    _check_criterion(c.hardness, "Hardness", errors)
+    _check_criterion(c.grain_size, "Grain Size", errors, needs_unit=False)
+    # A limit is only comparable when it is in the same unit as the result.
+    for label, crit_unit, result_unit in (
+        ("Yield Strength", c.yield_strength.unit, t.yield_unit),
+        ("UTS", c.uts.unit, t.uts_unit),
+        ("Hardness", c.hardness.unit, config.hardness.scale),
+    ):
+        if crit_unit and result_unit and crit_unit != result_unit:
+            errors.append(f"{label}: criterion unit ({crit_unit}) differs from the result unit "
+                          f"({result_unit}). No conversion is performed.")
+    return errors
 
 
 def validate_report(report: InspectionReport) -> ValidationResult:
@@ -88,7 +116,7 @@ def validate_report(report: InspectionReport) -> ValidationResult:
     for i, reading in enumerate(h.readings, start=1):
         _check_non_negative(reading, f"Hardness reading {i}", errors)
     if h.readings and not h.scale:
-        errors.append("Hardness: select a hardness scale.")
+        errors.append("Hardness: no hardness scale is set — set it in Settings / Edit Defaults.")
 
     # --- Metallography ----------------------------------------------------
     _check_non_negative(m.grain_size, "Grain Size number", errors)

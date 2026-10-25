@@ -1,7 +1,8 @@
 """SQLite report history.
 
 Stores searchable metadata plus the full report data (JSON) so a report can be
-reopened and regenerated. The Anthropic API key is never part of the report
+reopened and regenerated, and a small key/value ``settings`` table that holds
+the saved report defaults. The Anthropic API key is never part of the report
 data and is never written here.
 """
 
@@ -35,6 +36,11 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 CREATE INDEX IF NOT EXISTS idx_reports_material ON reports(material);
 CREATE INDEX IF NOT EXISTS idx_reports_heat ON reports(heat_batch);
+CREATE TABLE IF NOT EXISTS settings (
+    key         TEXT PRIMARY KEY,
+    value_json  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
 """
 
 LIST_COLUMNS = (
@@ -117,6 +123,32 @@ class ReportRepository:
         with self._connect() as conn:
             row = conn.execute("SELECT data_json FROM reports WHERE id = ?", (report_id,)).fetchone()
         return InspectionReport.from_dict(json.loads(row["data_json"])) if row else None
+
+    def latest(self, include_samples: bool = False) -> Optional[InspectionReport]:
+        """Most recently saved report (sample reports excluded by default)."""
+        where = "" if include_samples else "WHERE is_sample = 0"
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT data_json FROM reports {where} ORDER BY updated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return InspectionReport.from_dict(json.loads(row["data_json"])) if row else None
+
+    # --- Settings (key/value JSON) ---------------------------------------
+
+    def get_setting(self, key: str) -> Optional[dict]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT value_json FROM settings WHERE key = ?", (key,)).fetchone()
+        return json.loads(row["value_json"]) if row else None
+
+    def set_setting(self, key: str, value: dict) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, "
+                "updated_at = excluded.updated_at",
+                (key, json.dumps(value, ensure_ascii=False), now),
+            )
 
     def delete(self, report_id: int) -> None:
         with self._connect() as conn:

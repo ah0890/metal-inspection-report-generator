@@ -8,26 +8,18 @@ from __future__ import annotations
 import streamlit as st
 
 from config import settings
-from database.database import ReportRepository
 from models.sample_data import sample_report
 from services import claude_service
 from services.calculation_service import evaluate_report
 from services.validation_service import validate_report
-from ui.acceptance_criteria import render_criteria
 from ui.ai_summary import render_ai_summary
 from ui.generate_report import render_generate
 from ui.history import render_history
-from ui.inspection_form import render_inspection_info
-from ui.mechanical_testing import render_mechanical
-from ui.metallography import render_metallography
-from ui.state import init_state, load_report, new_report, report_from_state
+from ui.inspection_form import render_inspection
+from ui.settings_page import render_settings
+from ui.state import get_repository, init_state, load_report, report_from_state, start_new_report
 
 st.set_page_config(page_title="Metal Inspection Report Generator", page_icon="🔩", layout="wide")
-
-
-@st.cache_resource
-def get_repository() -> ReportRepository:
-    return ReportRepository()
 
 
 def _sidebar() -> None:
@@ -37,8 +29,7 @@ def _sidebar() -> None:
 
         st.button("Load Sample Data", icon="🧪", width="stretch",
                   on_click=load_report, args=(sample_report(),))
-        st.button("New Report", icon="🆕", width="stretch",
-                  on_click=load_report, args=(new_report(),))
+        st.button("New Report", icon="🆕", width="stretch", on_click=start_new_report)
 
         report = report_from_state()
         if report.info.is_sample:
@@ -69,28 +60,21 @@ def main() -> None:
 
     st.title("Metal Inspection Report Generator")
     tabs = st.tabs([
-        "1 · Inspection Information",
-        "2 · Mechanical Testing",
-        "3 · Metallography",
-        "4 · Acceptance Criteria",
-        "5 · AI Summary",
-        "6 · Generate Report",
+        "1 · Inspection & Report",
+        "2 · AI Summary (optional)",
         "Report History",
+        "⚙️ Settings / Edit Defaults",
     ])
     with tabs[0]:
-        render_inspection_info()
-    with tabs[1]:
-        render_mechanical()
-    with tabs[2]:
-        render_metallography()
-    with tabs[3]:
-        render_criteria()
-    with tabs[4]:
-        render_ai_summary()
-    with tabs[5]:
+        render_inspection()
+        st.divider()
         render_generate(repo)
-    with tabs[6]:
+    with tabs[1]:
+        render_ai_summary()
+    with tabs[2]:
         render_history(repo)
+    with tabs[3]:
+        render_settings()
 
 
 main()
