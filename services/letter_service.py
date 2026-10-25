@@ -21,6 +21,10 @@ from reports.letter_pdf import generate_letter_pdf
 from services.report_service import build_docx, build_pdf
 
 COMPANY_KEY = "company_profile"
+
+# Letter numbers: QC-AH-OL-<serial>/<two-digit year>, e.g. QC-AH-OL-01/26.
+LETTER_PREFIX = "QC-AH-OL-"
+_LETTER_NUMBER_RE = re.compile(r"^QC-AH-OL-(\d+)(?:/(\d{2}))?$")
 PDF_MIME = "application/pdf"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -114,11 +118,12 @@ def validate_letter(letter: CoveringLetter, reports: list[InspectionReport],
     if letter.letter_number.strip() and letter.letter_number.strip() in numbers_in_reports:
         warnings.append("The letter number is the same as an inspection report number; "
                         "they are normally different references.")
-    if not (letter.indenter.strip() or letter.forward_to.strip()):
-        warnings.append("No indenter or forwarding authority entered (and none in the reports): "
-                        "the onward-transmission sentence will be omitted.")
-    if not letter.project_name.strip():
-        warnings.append("No project name: the subject line will not name a project.")
+    if letter.template_version == 1:
+        if not (letter.indenter.strip() or letter.forward_to.strip()):
+            warnings.append("No indenter or forwarding authority entered (and none in the "
+                            "reports): the onward-transmission sentence will be omitted.")
+        if not letter.project_name.strip():
+            warnings.append("No project name: the subject line will not name a project.")
     words = outcome_words(letter.body_override)
     if words:
         warnings.append("The edited wording mentions results (" + ", ".join(words) + "). The "
@@ -187,10 +192,51 @@ def finalize_submission(repo: ReportRepository, letter: CoveringLetter,
     return package
 
 
-def revision_number(letter_number: str, repo: ReportRepository) -> str:
-    """Next unused revision reference, e.g. 'AH/2026/014' -> 'AH/2026/014-R1'."""
-    base = re.sub(r"-R\d+$", "", letter_number.strip())
-    k = 1
-    while repo.letter_status(f"{base}-R{k}") is not None:
-        k += 1
-    return f"{base}-R{k}"
+# --------------------------------------------------------------------------
+# Letter numbering
+# --------------------------------------------------------------------------
+
+def normalize_letter_number(text: str) -> str:
+    """Letter numbers are stored in uppercase without surrounding spaces."""
+    return (text or "").strip().upper()
+
+
+def format_letter_number(serial: int, year: int) -> str:
+    return f"{LETTER_PREFIX}{int(serial):02d}/{int(year) % 100:02d}"
+
+
+def parse_letter_number(number: str) -> Optional[tuple[int, int]]:
+    """(serial, two-digit year) for numbers in the standard format, else None."""
+    m = _LETTER_NUMBER_RE.match(normalize_letter_number(number))
+    if not m or m.group(2) is None:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def _year_of(iso_date: str) -> Optional[int]:
+    try:
+        return date.fromisoformat(iso_date).year % 100
+    except (TypeError, ValueError):
+        return None
+
+
+def next_letter_number(repo: ReportRepository, on: Optional[date] = None) -> str:
+    """Next free serial for the year, e.g. QC-AH-OL-03/26 after QC-AH-OL-02/26.
+
+    Numbers issued without a year suffix (e.g. 'QC-AH-OL-01') count towards
+    the year of their letter date, so their serials are not reused that year.
+    """
+    year = (on or date.today()).year % 100
+    used = 0
+    for number, letter_date in repo.letter_numbers():
+        m = _LETTER_NUMBER_RE.match(normalize_letter_number(number))
+        if not m:
+            continue
+        number_year = int(m.group(2)) if m.group(2) else _year_of(letter_date)
+        if number_year == year:
+            used = max(used, int(m.group(1)))
+    candidate = format_letter_number(used + 1, year)
+    while repo.letter_id(candidate) is not None:  # e.g. a manually entered number
+        used += 1
+        candidate = format_letter_number(used + 1, year)
+    return candidate

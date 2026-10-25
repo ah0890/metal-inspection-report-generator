@@ -183,7 +183,7 @@ exactly as written.
 satisfactory, etc.). The letter only forwards the reports.
 - Do not claim accreditation, certification or government status.
 - Formal, concise British business English. Plain text, no markdown.
-- Return 3 to 4 short paragraphs, at most 170 words in total. Do not include \
+- Return 2 to 4 short paragraphs, at most 170 words in total. Do not include \
 the salutation, closing, signature or enclosure list.
 """
 

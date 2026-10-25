@@ -9,9 +9,10 @@ import pandas as pd
 import streamlit as st
 
 from database.database import LetterFinalizedError
-from models.letter import STATUS_FINAL, CoveringLetter
+from models.letter import CURRENT_TEMPLATE_VERSION, STATUS_FINAL, CoveringLetter
 from reports.letter_content import (
     build_letter_content,
+    derived_sample_count,
     derived_values,
     letter_plain_text,
     resolve_letter,
@@ -24,8 +25,12 @@ from services.letter_service import (
     build_package,
     finalize_submission,
     find_reports,
+    LETTER_PREFIX,
+    format_letter_number,
     load_company,
-    revision_number,
+    next_letter_number,
+    normalize_letter_number,
+    parse_letter_number,
     validate_letter,
 )
 from services.report_service import ReportValidationError, build_pdf
@@ -39,6 +44,19 @@ _TRANSIENT = ("letter_files", "letter_package", "letter_ai_error")
 # Session state <-> CoveringLetter
 # --------------------------------------------------------------------------
 
+def _set_number_parts(number: str) -> None:
+    """Split a letter number into the serial / year inputs, or the full-number field."""
+    s = st.session_state
+    parts = parse_letter_number(number)
+    s[P + "custom_number"] = parts is None
+    if parts:
+        s[P + "serial"], s[P + "year"] = parts
+    else:
+        today = date.today()
+        s[P + "serial"], s[P + "year"] = 1, today.year % 100
+    s[P + "full_number"] = normalize_letter_number(number)
+
+
 def load_letter_into_state(letter: CoveringLetter, status: str = "", letter_id=None) -> None:
     s = st.session_state
     for f in fields(CoveringLetter):
@@ -47,10 +65,18 @@ def load_letter_into_state(letter: CoveringLetter, status: str = "", letter_id=N
         s[P + "letter_date"] = date.fromisoformat(letter.letter_date)
     except ValueError:
         s[P + "letter_date"] = date.today()
+    _set_number_parts(letter.letter_number)
     s["letter_status"] = status
     s["letter_id"] = letter_id
     for key in _TRANSIENT:
         s.pop(key, None)
+
+
+def current_letter_number() -> str:
+    s = st.session_state
+    if s.get(P + "custom_number"):
+        return normalize_letter_number(s.get(P + "full_number", ""))
+    return format_letter_number(s.get(P + "serial") or 1, s.get(P + "year") or 0)
 
 
 def letter_from_state() -> CoveringLetter:
@@ -63,16 +89,23 @@ def letter_from_state() -> CoveringLetter:
         if isinstance(value, str):
             setattr(letter, f.name, value.strip())
     letter.report_numbers = list(s.get(P + "report_numbers") or [])
+    letter.letter_number = current_letter_number()
     return letter
+
+
+def _blank_letter() -> CoveringLetter:
+    """New letter: next free number, today's date, nothing carried over."""
+    return CoveringLetter(letter_number=next_letter_number(get_repository()),
+                          letter_date=date.today().isoformat())
 
 
 def init_letter_state() -> None:
     if P + "letter_number" not in st.session_state:
-        load_letter_into_state(CoveringLetter(letter_date=date.today().isoformat()))
+        load_letter_into_state(_blank_letter())
 
 
 def _new_letter() -> None:
-    load_letter_into_state(CoveringLetter(letter_date=date.today().isoformat()))
+    load_letter_into_state(_blank_letter())
 
 
 # --------------------------------------------------------------------------
@@ -116,9 +149,20 @@ def _reopen_letter(letter_id: int) -> None:
         load_letter_into_state(record["letter"], record["status"], letter_id)
 
 
+def _upper_full_number() -> None:
+    st.session_state[P + "full_number"] = normalize_letter_number(
+        st.session_state.get(P + "full_number", ""))
+
+
+def _use_next_number() -> None:
+    _set_number_parts(next_letter_number(get_repository()))
+
+
 def _start_revision() -> None:
+    """Changes to a finalized letter go out as a new letter with the next number."""
     s = st.session_state
-    s[P + "letter_number"] = revision_number(s.get(P + "letter_number", ""), get_repository())
+    _set_number_parts(next_letter_number(get_repository()))
+    s[P + "template_version"] = CURRENT_TEMPLATE_VERSION
     s[P + "letter_date"] = date.today()
     s["letter_status"] = ""
     s["letter_id"] = None
@@ -183,9 +227,9 @@ def render_covering_letter() -> None:
 
     st.subheader("Covering Letter Details")
     c1, c2 = st.columns([3, 1])
-    c1.caption("The covering letter is a separate document from the inspection report. Report "
-               "numbers, dates, materials and sample IDs are filled in automatically from the "
-               "enclosed reports; anything you type here takes precedence.")
+    c1.caption("The covering letter is a separate document from the inspection report. The "
+               "material/product, sample IDs and enclosure list are taken automatically from the "
+               "enclosed reports.")
     c2.button("New letter", icon="🆕", on_click=_new_letter, width="stretch")
 
     if s.get("letter_status") == STATUS_FINAL:
@@ -216,13 +260,33 @@ def render_covering_letter() -> None:
     letter = letter_from_state()
     reports, missing, current = _gather_reports(letter)
     auto = derived_values(reports)
+    auto_count = derived_sample_count(reports)
 
     # --- Letter information ------------------------------------------------
     st.markdown("#### Letter Information")
-    c1, c2 = st.columns(2)
-    c1.text_input("Letter Number / Reference Number *", key=P + "letter_number",
-                  help="Separate from the inspection report number.")
-    c2.date_input("Letter Date *", key=P + "letter_date", format="YYYY-MM-DD")
+    c1, c2, c3, c4 = st.columns([1.3, 1, 1, 1.6])
+    if s.get(P + "custom_number"):
+        c1.text_input("Letter Number *", key=P + "full_number", on_change=_upper_full_number,
+                      help="Full letter number; letters are converted to uppercase.")
+    else:
+        c1.text_input("Letter Number prefix", value=LETTER_PREFIX, disabled=True)
+        c2.number_input("Serial No. *", key=P + "serial", min_value=1, max_value=999, step=1)
+        c3.number_input("Year (YY) *", key=P + "year", min_value=0, max_value=99, step=1,
+                        format="%02d")
+    c4.date_input("Letter Date *", key=P + "letter_date", format="YYYY-MM-DD",
+                  help="Defaults to today's date.")
+    c1, c2 = st.columns([3, 1])
+    c1.caption(f"Letter number: **{current_letter_number()}** — separate from the inspection "
+               "report number(s).")
+    c2.checkbox("Edit complete number", key=P + "custom_number")
+    existing_id = repo.letter_id(current_letter_number())
+    number_taken = existing_id is not None and existing_id != s.get("letter_id")
+    if number_taken:
+        st.error(f"Letter number {current_letter_number()} has already been issued "
+                 f"({repo.letter_status(current_letter_number())}). Use another number.")
+        st.button(f"Use the next free number ({next_letter_number(repo)})", on_click=_use_next_number)
+
+    st.markdown("#### Recipient")
     c1, c2 = st.columns(2)
     _text(c1, "Recipient organization *", "recipient_organization", history=True)
     _text(c2, "Recipient department / section", "recipient_department", history=True)
@@ -230,43 +294,40 @@ def render_covering_letter() -> None:
     _text(c1, "Recipient name / designation", "recipient_name", history=True)
     _text(c2, "Recipient address", "recipient_address", history=True, area=True)
 
-    # --- Project and submission ---------------------------------------------
-    st.markdown("#### Project and Submission Information")
-    c1, c2 = st.columns(2)
-    _text(c1, "Project Name", "project_name", history=True)
-    _text(c2, "Project Number / Reference", "project_reference", history=True)
-    c1, c2 = st.columns(2)
-    _text(c1, "Indenter / Requesting Organization", "indenter", history=True,
-          placeholder=f"Auto from report customer: {auto['indenter']}" if auto["indenter"] else "")
-    _text(c2, "Sample Submission Reference Number", "submission_reference")
-    c1, c2, c3 = st.columns(3)
-    _text(c1, "Sample Receipt Date", "receipt_date", placeholder="e.g. 2026-10-20")
-    _text(c2, "Inspection / Testing Date or Range", "testing_date",
-          placeholder=f"Auto from reports: {auto['testing_date']}" if auto["testing_date"] else "")
-    c3.number_input("Number of Samples", key=P + "sample_count", value=None, min_value=1, step=1,
-                    placeholder="Not stated")
-    c1, c2 = st.columns(2)
-    _text(c1, "Material / Product Description", "material_description",
-          placeholder=f"Auto: {auto['material_description']}" if auto["material_description"] else "")
-    _text(c2, "Sample IDs or Batch Numbers", "sample_ids",
+    # --- Samples -------------------------------------------------------------
+    st.markdown("#### Samples")
+    if s.get(P + "template_version", CURRENT_TEMPLATE_VERSION) == 1:
+        st.caption("This letter was created with the original letter template; its project and "
+                   "submission details are kept as issued.")
+    c1, c2 = st.columns([1, 3])
+    c1.number_input("Number of Samples", key=P + "sample_count", value=None, min_value=1, step=1,
+                    placeholder=f"Auto: {auto_count}" if auto_count else "Not stated",
+                    help="Leave empty to use the number of sample numbers in the enclosed reports.")
+    _text(c2, "Sample IDs / Batch Numbers", "sample_ids",
           placeholder=f"Auto: {auto['sample_ids']}" if auto["sample_ids"] else "")
-    _text(st, "Additional reference details (one per line)", "additional_references", area=True)
+    if auto["material_description"]:
+        st.caption(f"Material / product (from the reports): **{auto['material_description']}**")
+    elif reports:
+        st.caption("No material/product is recorded in the enclosed reports; the letter will "
+                   "refer to the material identified in the enclosed report(s).")
 
-    # --- Forwarding -----------------------------------------------------------
-    st.markdown("#### Forwarding Information")
+    # --- Signature and transmission ---------------------------------------------
+    st.markdown("#### Signature")
     c1, c2, c3 = st.columns(3)
     _text(c1, "General Manager's name", "signatory_name",
           placeholder=company.signatory_name or "Set a default in Settings")
     _text(c2, "Designation", "signatory_designation",
           placeholder=company.signatory_designation or "General Manager")
-    _text(c3, "Ultimately forwarded to (if required)", "forward_to", history=True,
-          help="Person or organization the reports are finally forwarded to. If empty, the "
-               "indenter is used.")
+    _text(c3, "Concerned authority (optional)", "forward_to", history=True,
+          help="Named in the transmission sentence. If empty, the letter says "
+               "'the concerned authority'.")
 
     # --- Review ----------------------------------------------------------------
     letter = letter_from_state()
     reports, missing, current = _gather_reports(letter)
     errors, warnings = validate_letter(letter, reports, missing)
+    if number_taken:
+        errors.append(f"Letter number {letter.letter_number} has already been issued.")
 
     st.markdown("#### Review the Letter")
     with st.expander("✏️ Edit or improve the wording (optional)"):

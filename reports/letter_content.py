@@ -12,7 +12,7 @@ import copy
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable
+from typing import Iterable, Optional
 
 from models.inspection import InspectionReport
 from models.letter import CompanyProfile, CoveringLetter
@@ -108,12 +108,30 @@ def derived_values(reports: list[InspectionReport]) -> dict[str, str]:
     }
 
 
+def derived_sample_count(reports: list[InspectionReport]) -> Optional[int]:
+    """Number of samples, when every enclosed report identifies its sample number."""
+    numbers = [r.info.sample_number.strip() for r in reports]
+    if not numbers or not all(numbers):
+        return None
+    return len(_unique(numbers))
+
+
+# Fields each template fills from the reports when left blank.
+_AUTO_FIELDS = {
+    1: ("material_description", "sample_ids", "testing_date", "indenter"),
+    2: ("material_description", "sample_ids"),
+}
+
+
 def resolve_letter(letter: CoveringLetter, reports: list[InspectionReport]) -> CoveringLetter:
     """Copy of the letter with blank fields filled from the enclosed reports."""
     resolved = copy.deepcopy(letter)
-    for key, value in derived_values(reports).items():
+    derived = derived_values(reports)
+    for key in _AUTO_FIELDS.get(letter.template_version, _AUTO_FIELDS[2]):
         if not getattr(resolved, key).strip():
-            setattr(resolved, key, value)
+            setattr(resolved, key, derived[key])
+    if letter.template_version >= 2 and resolved.sample_count is None:
+        resolved.sample_count = derived_sample_count(reports)
     return resolved
 
 
@@ -145,7 +163,46 @@ def _report_phrase(numbers: list[str]) -> str:
 
 
 def standard_paragraphs(letter: CoveringLetter, reports: list[InspectionReport]) -> list[str]:
-    """Standard wording built only from the provided data. ``letter`` must be resolved."""
+    """Standard wording for the letter's template version. ``letter`` must be resolved."""
+    if letter.template_version == 1:
+        return _paragraphs_v1(letter, reports)
+    return _paragraphs_v2(letter, reports)
+
+
+def _paragraphs_v2(letter: CoveringLetter, reports: list[InspectionReport]) -> list[str]:
+    """Simplified wording: samples received and tested; reports enclosed for transmission."""
+    n = letter.sample_count
+    if not n:
+        samples, verb = "samples", "have"
+    elif n == 1:
+        samples, verb = "sample", "has"
+    else:
+        samples, verb = f"{_NUMBER_WORDS.get(n, str(n))} samples", "have"
+
+    if letter.material_description:
+        subject = f"The {samples} of {letter.material_description}"
+    else:
+        subject = (f"The {samples} pertaining to the material/product identified in the enclosed "
+                   "inspection report" + ("s" if len(letter.report_numbers) != 1 else ""))
+    if letter.sample_ids:
+        subject += f" ({letter.sample_ids})"
+    activities = join_list(_unique(a for r in reports for a in report_activities(r)))
+    p1 = (f"{subject} {verb} been received and subjected to the specified inspection and testing"
+          + (f", namely {activities}." if activities else "."))
+
+    numbers = letter.report_numbers
+    if len(numbers) == 1:
+        reports_phrase = f"Inspection and Testing Report No. {numbers[0]} is"
+    else:
+        reports_phrase = f"Inspection and Testing Reports Nos. {join_list(numbers)} are"
+    target = letter.forward_to or "the concerned authority"
+    p2 = (f"The corresponding {reports_phrase} enclosed herewith for your review and further "
+          f"necessary transmission to {target}.")
+    return [p1, p2]
+
+
+def _paragraphs_v1(letter: CoveringLetter, reports: list[InspectionReport]) -> list[str]:
+    """Original wording (template v1). Kept unchanged for previously issued letters."""
     n = letter.sample_count
     count = _NUMBER_WORDS.get(n, str(n))
     samples = "the samples" if not n else ("the sample" if n == 1 else f"the {count} samples")
@@ -200,19 +257,20 @@ def build_letter_content(letter: CoveringLetter, reports: list[InspectionReport]
     recipient_lines = [line.strip() for line in recipient if line.strip()]
     recipient_lines += [line.strip() for line in letter.recipient_address.splitlines() if line.strip()]
 
+    v1 = letter.template_version == 1
     noun = "Report" if len(numbers) == 1 else "Reports"
     subject = f"Submission of Inspection and Testing {noun}"
-    if letter.project_name:
-        subject += f" for {letter.project_name}"
-    elif letter.material_description:
-        subject += f" – {letter.material_description}"
-
     refs = []
-    if letter.project_reference:
-        refs.append(f"Project Ref.: {letter.project_reference}")
-    if letter.submission_reference:
-        refs.append(f"Sample Submission Ref.: {letter.submission_reference}")
-    refs += [line.strip() for line in letter.additional_references.splitlines() if line.strip()]
+    if v1:
+        if letter.project_name:
+            subject += f" for {letter.project_name}"
+        elif letter.material_description:
+            subject += f" – {letter.material_description}"
+        if letter.project_reference:
+            refs.append(f"Project Ref.: {letter.project_reference}")
+        if letter.submission_reference:
+            refs.append(f"Sample Submission Ref.: {letter.submission_reference}")
+        refs += [line.strip() for line in letter.additional_references.splitlines() if line.strip()]
 
     if letter.body_override.strip():
         paragraphs = [p.strip() for p in letter.body_override.split("\n\n") if p.strip()]
@@ -223,13 +281,14 @@ def build_letter_content(letter: CoveringLetter, reports: list[InspectionReport]
     for number in numbers:
         r = by_number.get(number)
         if r is None:
-            enclosures.append(f"Inspection Report No. {number}")
+            enclosures.append(f"{'Inspection' if v1 else 'Inspection and Testing'} Report No. {number}")
             continue
         details = [" ".join(p for p in (r.info.material, r.info.grade) if p.strip())]
         if r.info.heat_batch.strip():
             details.append(f"Heat/Batch {r.info.heat_batch.strip()}")
         detail = ", ".join(d for d in details if d)
-        enclosures.append(f"{report_title(r)} No. {number}" + (f" ({detail})" if detail else ""))
+        title = report_title(r) if v1 else "Inspection and Testing Report"
+        enclosures.append(f"{title} No. {number}" + (f" ({detail})" if detail else ""))
 
     return LetterContent(
         company=company,

@@ -198,6 +198,18 @@ class ReportRepository:
 
     # --- Covering letters ------------------------------------------------
 
+    def letter_numbers(self) -> list[tuple[str, str]]:
+        """(letter number, letter date) for every saved letter."""
+        with self._connect() as conn:
+            return [(r["letter_number"], r["letter_date"] or "")
+                    for r in conn.execute("SELECT letter_number, letter_date FROM letters")]
+
+    def letter_id(self, letter_number: str) -> Optional[int]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT id FROM letters WHERE letter_number = ?",
+                               (letter_number.strip(),)).fetchone()
+        return row["id"] if row else None
+
     def letter_status(self, letter_number: str) -> Optional[str]:
         with self._connect() as conn:
             row = conn.execute("SELECT status FROM letters WHERE letter_number = ?",

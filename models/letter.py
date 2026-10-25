@@ -15,6 +15,12 @@ DEFAULT_TAGLINE = "Precision • Integrity • Quality"
 STATUS_DRAFT = "DRAFT"
 STATUS_FINAL = "FINAL"
 
+# Letter wording/layout versions. Letters keep the version they were created
+# with, so a previously issued letter regenerates exactly as issued.
+#   1: original template (project / submission / indenter details)
+#   2: simplified template (recipient + number of samples + sample IDs)
+CURRENT_TEMPLATE_VERSION = 2
+
 
 def _from_dict(cls, data: Optional[dict]):
     data = data or {}
@@ -60,7 +66,8 @@ class CoveringLetter:
     recipient_department: str = ""
     recipient_name: str = ""  # name and/or designation
     recipient_address: str = ""
-    # Project and submission information
+    # Project and submission information (template v1 only, except
+    # sample_count / sample_ids / material_description which v2 also uses)
     project_name: str = ""
     project_reference: str = ""
     indenter: str = ""  # indenter / requesting organization
@@ -79,10 +86,14 @@ class CoveringLetter:
     report_numbers: list[str] = field(default_factory=list)
     # Optional reviewed wording. Empty -> standard deterministic wording.
     body_override: str = ""
+    template_version: int = CURRENT_TEMPLATE_VERSION
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Optional[dict]) -> "CoveringLetter":
+        data = dict(data or {})
+        # Letters saved before versioning used the original template.
+        data.setdefault("template_version", 1)
         return _from_dict(cls, data)

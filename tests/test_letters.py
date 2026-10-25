@@ -17,7 +17,9 @@ from services.letter_service import (
     finalize_submission,
     find_reports,
     load_company,
-    revision_number,
+    format_letter_number,
+    next_letter_number,
+    parse_letter_number,
     save_company,
     validate_letter,
 )
@@ -38,16 +40,21 @@ def _letter(**kw):
     return CoveringLetter(**base)
 
 
+def _v1_letter(**kw):
+    """Letter on the original template (previously issued letters)."""
+    return _letter(template_version=1, **kw)
+
+
 def _pdf_text(data: bytes) -> tuple[int, str]:
     reader = PdfReader(io.BytesIO(data))
     return len(reader.pages), "\n".join(p.extract_text() for p in reader.pages)
 
 
-# --- Wording ----------------------------------------------------------------
+# --- Wording: original template (v1), kept for previously issued letters --------
 
-def test_indenter_and_recipient_are_dynamic():
+def test_v1_indenter_and_recipient_are_dynamic():
     for indenter, recipient in (("PCSIR", "Project Office A"), ("Client Ltd", "Directorate B")):
-        c = build_letter_content(_letter(indenter=indenter, recipient_organization=recipient),
+        c = build_letter_content(_v1_letter(indenter=indenter, recipient_organization=recipient),
                                  [_report()], CompanyProfile())
         body = " ".join(c.paragraphs)
         assert f"received from {indenter}" in body
@@ -55,16 +62,16 @@ def test_indenter_and_recipient_are_dynamic():
         assert recipient in c.recipient_lines
 
 
-def test_forward_to_takes_precedence_for_onward_transmission():
-    c = build_letter_content(_letter(indenter="PCSIR", forward_to="Chief Engineer, Project XYZ"),
+def test_v1_forward_to_takes_precedence_for_onward_transmission():
+    c = build_letter_content(_v1_letter(indenter="PCSIR", forward_to="Chief Engineer, Project XYZ"),
                              [_report()], CompanyProfile())
     assert "onward transmission to Chief Engineer, Project XYZ" in " ".join(c.paragraphs)
 
 
-def test_missing_details_are_omitted_not_invented():
+def test_v1_missing_details_are_omitted_not_invented():
     r = _report()
     r.info.customer = ""  # no indenter can be derived either
-    c = build_letter_content(_letter(), [r], CompanyProfile())
+    c = build_letter_content(_v1_letter(), [r], CompanyProfile())
     body = " ".join(c.paragraphs)
     assert "vide reference" not in body
     assert "received from" not in body
@@ -89,20 +96,20 @@ def test_activities_come_from_report_data():
     assert "hardness" not in body and "metallographic" not in body
 
 
-def test_auto_values_from_reports_and_manual_override():
+def test_v1_auto_values_from_reports_and_manual_override():
     reports = [_report("QC-1", "HT-1", "S-1", "2026-10-20"), _report("QC-2", "HT-2", "S-2", "2026-10-22")]
-    c = build_letter_content(_letter(report_numbers=["QC-1", "QC-2"]), reports, CompanyProfile())
+    c = build_letter_content(_v1_letter(report_numbers=["QC-1", "QC-2"]), reports, CompanyProfile())
     body = " ".join(c.paragraphs)
     assert "Sample No. S-1, S-2; Heat/Batch HT-1, HT-2" in body
     assert "20 October 2026 to 22 October 2026" in body
-    c2 = build_letter_content(_letter(report_numbers=["QC-1", "QC-2"], testing_date="21–23 Oct 2026"),
+    c2 = build_letter_content(_v1_letter(report_numbers=["QC-1", "QC-2"], testing_date="21–23 Oct 2026"),
                               reports, CompanyProfile())
     assert "21–23 Oct 2026" in " ".join(c2.paragraphs)
 
 
-def test_multiple_reports_listed_in_order():
+def test_v1_multiple_reports_listed_in_order():
     reports = [_report("QC-2", "HT-2"), _report("QC-1", "HT-1")]
-    c = build_letter_content(_letter(report_numbers=["QC-2", "QC-1"]), reports, CompanyProfile())
+    c = build_letter_content(_v1_letter(report_numbers=["QC-2", "QC-1"]), reports, CompanyProfile())
     assert "Inspection Reports Nos. QC-2 and QC-1" in " ".join(c.paragraphs)
     assert c.enclosures[0].startswith("Mechanical Testing and Metallography Inspection Report No. QC-2")
     assert c.enclosures[1].startswith("Mechanical Testing and Metallography Inspection Report No. QC-1")
@@ -161,7 +168,7 @@ def test_long_letter_still_one_page():
 
 
 def test_letter_docx_contents():
-    _, docx, _ = build_letter_documents(_letter(indenter="PCSIR"), [_report()], CompanyProfile())
+    _, docx, _ = build_letter_documents(_letter(forward_to="PCSIR"), [_report()], CompanyProfile())
     text = "\n".join(p.text for p in Document(io.BytesIO(docx.data)).paragraphs)
     assert "AHP/L/001" in text and "25 October 2026" in text and "PCSIR" in text
     assert "Enclosures:" in text and "QC-1" in text
@@ -207,9 +214,7 @@ def test_finalized_letter_is_preserved_and_not_overwritten(tmp_path):
     assert record["reports"][0].tensile.uts == 325
     assert record["company"].name == "AH Precision Inspection & Testing Services"
 
-    rev = revision_number("AHP/L/001", repo)
-    assert rev == "AHP/L/001-R1"
-    repo.save_letter(_letter(letter_number=rev))
+    repo.save_letter(_letter(letter_number="QC-AH-OL-05/26"))
     assert len(repo.search_letters()) == 2
 
 
@@ -243,3 +248,84 @@ def test_existing_report_history_untouched_by_letters(tmp_path):
     finalize_submission(repo, _letter(), [report], CompanyProfile())
     assert repo.get_report("QC-1") == report
     assert [r["report_number"] for r in repo.search()] == ["QC-1"]
+
+
+# --- Simplified template (v2) for new letters --------------------------------------
+
+def test_new_letters_use_simplified_template_and_old_ones_keep_v1():
+    assert CoveringLetter().template_version == 2
+    assert CoveringLetter.from_dict({"letter_number": "OLD"}).template_version == 1
+
+
+def test_v2_wording_uses_report_data_without_project_fields():
+    reports = [_report("QC-1", "HT-1", "S-1"), _report("QC-2", "HT-2", "S-2")]
+    c = build_letter_content(_letter(report_numbers=["QC-1", "QC-2"]), reports, CompanyProfile())
+    body = " ".join(c.paragraphs)
+    assert c.subject == "Submission of Inspection and Testing Reports"
+    assert c.reference_lines == []
+    assert body.startswith("The two samples of Aluminium Alloy Example Alloy "
+                           "(Sample No. S-1, S-2; Heat/Batch HT-1, HT-2) have been received")
+    assert "Inspection and Testing Reports Nos. QC-1 and QC-2 are enclosed herewith" in body
+    assert "transmission to the concerned authority." in body
+    assert c.enclosures == [
+        "Inspection and Testing Report No. QC-1 (Aluminium Alloy Example Alloy, Heat/Batch HT-1)",
+        "Inspection and Testing Report No. QC-2 (Aluminium Alloy Example Alloy, Heat/Batch HT-2)",
+    ]
+    for word in ("project", "indenter", "vide reference", "received from"):
+        assert word not in body.lower()
+
+
+def test_v2_single_report_and_named_authority():
+    c = build_letter_content(_letter(forward_to="PCSIR"), [_report()], CompanyProfile())
+    body = " ".join(c.paragraphs)
+    assert c.subject == "Submission of Inspection and Testing Report"
+    assert "The sample of Aluminium Alloy Example Alloy" in body and "has been received" in body
+    assert "Inspection and Testing Report No. QC-1 is enclosed herewith" in body
+    assert "transmission to PCSIR." in body
+
+
+def test_v2_manual_sample_count_and_ids_take_precedence():
+    c = build_letter_content(_letter(sample_count=4, sample_ids="Bars B1–B4"), [_report()],
+                             CompanyProfile())
+    assert "The four samples of Aluminium Alloy Example Alloy (Bars B1–B4)" in c.paragraphs[0]
+
+
+def test_v2_missing_material_is_not_invented():
+    r = _report()
+    r.info.material = r.info.grade = r.info.sample_number = r.info.heat_batch = ""
+    c = build_letter_content(_letter(), [r], CompanyProfile())
+    assert c.paragraphs[0].startswith(
+        "The samples pertaining to the material/product identified in the enclosed inspection report "
+        "have been received")
+
+
+def test_v2_letter_fits_one_page_with_many_reports():
+    reports = [_report(f"QC-{i}", f"HT-{i}", f"S-{i}") for i in range(1, 7)]
+    letter = _letter(report_numbers=[r.info.report_number for r in reports],
+                     recipient_name="The Director", recipient_department="Quality Division",
+                     recipient_address="Building 1\nStreet 2\nCity", signatory_name="Name")
+    _, _, pages = build_letter_documents(letter, reports, CompanyProfile(address="A", email="e@x"))
+    assert pages == 1
+
+
+# --- Letter numbering -----------------------------------------------------------
+
+def test_letter_number_format_and_parsing():
+    assert format_letter_number(1, 2026) == "QC-AH-OL-01/26"
+    assert format_letter_number(12, 27) == "QC-AH-OL-12/27"
+    assert parse_letter_number("qc-ah-ol-07/26") == (7, 26)
+    assert parse_letter_number("QC-AH-OL-01") is None  # legacy number without year
+
+
+def test_next_letter_number_avoids_duplicates(tmp_path):
+    from datetime import date
+
+    repo = ReportRepository(tmp_path / "h.db")
+    on = date(2026, 10, 25)
+    assert next_letter_number(repo, on) == "QC-AH-OL-01/26"
+    repo.save_letter(_letter(letter_number="QC-AH-OL-01"))  # legacy, no year suffix (dated 2026)
+    assert next_letter_number(repo, on) == "QC-AH-OL-02/26"
+    repo.save_letter(_letter(letter_number="QC-AH-OL-02/26"))
+    repo.save_letter(_letter(letter_number="QC-AH-OL-07/25"))  # other year
+    assert next_letter_number(repo, on) == "QC-AH-OL-03/26"
+    assert next_letter_number(repo, date(2027, 1, 2)) == "QC-AH-OL-01/27"
